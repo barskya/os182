@@ -120,6 +120,10 @@ void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
 void            yield(void);
+//ass2
+uint            sigprocmask(uint sigmask);
+sighandler_t    signal(int signum, sighandler_t handler);
+void            sigret(void);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

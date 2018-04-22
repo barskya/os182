@@ -104,6 +104,11 @@ extern int sys_wait(void);
 extern int sys_write(void);
 extern int sys_uptime(void);
 
+//ass2
+extern int sys_sigprocmask(void);
+extern int sys_signal(void);
+extern int sys_sigret(void);
+
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
 [SYS_exit]    sys_exit,
@@ -126,6 +131,10 @@ static int (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+//ass2
+[SYS_sigprocmask] sys_sigprocmask,
+[SYS_signal] sys_signal,
+[SYS_sigret] sys_sigret,
 };
 
 void

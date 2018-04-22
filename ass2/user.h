@@ -24,6 +24,11 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 
+//ass2
+uint sigprocmask(uint sigmask);
+sighandler_t signal(int signum, sighandler_t handler);
+void sigret(void);
+
 // ulib.c
 int stat(char*, struct stat*);
 char* strcpy(char*, char*);

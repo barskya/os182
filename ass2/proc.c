@@ -130,17 +130,16 @@ found:
 //PAGEBREAK: 32
 // Set up first user process.
 void
-userinit(void)
-{
+userinit(void) {
   struct proc *p;
   extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
-  
+
   initproc = p;
-  if((p->pgdir = setupkvm()) == 0)
+  if ((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
-  inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
+  inituvm(p->pgdir, _binary_initcode_start, (int) _binary_initcode_size);
   p->sz = PGSIZE;
   memset(p->tf, 0, sizeof(*p->tf));
   p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
@@ -159,6 +158,14 @@ userinit(void)
   // writes to be visible, and the lock is also needed
   // because the assignment might not be atomic.
   acquire(&ptable.lock);
+
+  //ass2
+  p->pending_signals = 0;
+  p->signal_mask = 0;
+  for (int i = 0; i < 32; i++) {
+    p->signal_handlers[i] = SIG_DFL;
+  }
+  p->tf_backup = 0;
 
   p->state = RUNNABLE;
 
@@ -225,6 +232,16 @@ fork(void)
   pid = np->pid;
 
   acquire(&ptable.lock);
+
+  //ass2
+  np->pending_signals = 0;
+  np->signal_mask = curproc->signal_mask;
+  //
+  int n = sizeof(curproc->signal_handlers) / sizeof(curproc->signal_handlers[0]);
+  for (int i = 0; i < n; i++) {
+     np->signal_handlers[i] = curproc->signal_handlers[i];
+  }
+  np->tf_backup = 0;
 
   np->state = RUNNABLE;
 
@@ -543,4 +560,45 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+//ass2
+uint sigprocmask(uint sigmask){
+    struct proc* p = myproc();
+
+    acquire(&ptable.lock);
+    uint current_signal_mask = p->signal_mask;
+    p->signal_mask = sigmask;
+    release(&ptable.lock);
+
+    return current_signal_mask;
+}
+
+sighandler_t signal(int signum, sighandler_t handler){
+    struct proc* p = myproc();
+    sighandler_t old_handler;
+
+    // todo make sure this validity is correct
+    // Check for validity: signum is between 0 to 31 and handler is valid pointer
+    if (signum < 0 || signum > 31 || handler == 0) {
+      return (sighandler_t) - 1;
+    }
+
+    // input is fine, change the handler
+    acquire(&ptable.lock);
+    old_handler = p->signal_handlers[signum];
+    p->signal_handlers[signum] = handler;
+    release(&ptable.lock);
+
+    return old_handler;
+}
+
+void sigret(void){
+    // todo - update backup?
+
+    struct proc* p = myproc();
+
+    // Need to restore the backup tf that was saved on the user stack
+    p->tf->esp += 8;
+    memmove(p->tf, (void *) p->tf->esp, sizeof(struct trapframe));
 }

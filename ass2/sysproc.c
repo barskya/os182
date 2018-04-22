@@ -89,3 +89,31 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//ass2
+int sys_sigprocmask(void) {
+  int sigmask;
+  if (argint(0, &sigmask) < 0){
+    return -1;
+  }
+  return (int)sigprocmask(sigmask);
+}
+
+int sys_signal(void) {
+  int signum;
+  int handler;
+
+  if (argint(0, &signum) < 0){
+    return -1;
+  }
+  if (argint(1, &handler) < 0){
+    return -1;
+  }
+
+  return (int)signal(signum, (sighandler_t)handler);
+}
+
+int sys_sigret(void) {
+  sigret();
+  return 1;
+}

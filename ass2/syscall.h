@@ -20,3 +20,7 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
+//ass2
+#define SYS_sigprocmask  21
+#define SYS_signal  22
+#define SYS_sigret 23
