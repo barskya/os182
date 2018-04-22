@@ -55,6 +55,7 @@ struct proc {
   uint signal_mask;
   void* signal_handlers[32];
   struct trapframe* tf_backup;
+  int stopped;
 };
 
 // ass2

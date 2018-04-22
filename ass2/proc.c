@@ -167,6 +167,8 @@ userinit(void) {
   }
   p->tf_backup = 0;
 
+  p->stopped = 0;
+
   p->state = RUNNABLE;
 
   release(&ptable.lock);
@@ -242,6 +244,8 @@ fork(void)
      np->signal_handlers[i] = curproc->signal_handlers[i];
   }
   np->tf_backup = 0;
+
+  np->stopped = 0;
 
   np->state = RUNNABLE;
 
@@ -506,22 +510,46 @@ wakeup(void *chan)
 // Process won't exit until it returns
 // to user space (see trap in trap.c).
 int
-kill(int pid)
+kill(int pid, int signum)
 {
   struct proc *p;
+
+  int succ = 1;
 
   acquire(&ptable.lock);
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->pid == pid){
-      p->killed = 1;
-      // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
-        p->state = RUNNABLE;
-      release(&ptable.lock);
-      return 0;
+
+      switch(signum) {
+        case SIGKILL:
+          p->killed = 1;
+
+          // Wake process from sleep if necessary.
+          if(p->state == SLEEPING) {
+              p->state = RUNNABLE;
+          }
+          break;
+        case SIGSTOP:
+          p->stopped = 1;
+          break;
+        case SIGCONT:
+          if (p->stopped != 1) {
+              p->pending_signals = (1 << signum) | p->pending_signals;
+          }
+          else {
+              succ = 0;
+          }
+          break;
+        default:
+            p->pending_signals = (1 << signum) | p->pending_signals;
+      }
     }
   }
+
   release(&ptable.lock);
+  if (succ == 1){
+    return 0;
+  }
   return -1;
 }
 
