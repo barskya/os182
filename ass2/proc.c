@@ -166,6 +166,7 @@ userinit(void) {
     p->signal_handlers[i] = SIG_DFL;
   }
   p->tf_backup = 0;
+  p->ignoreSignals = 0;
 
   p->stopped = 0;
 
@@ -244,6 +245,7 @@ fork(void)
      np->signal_handlers[i] = curproc->signal_handlers[i];
   }
   np->tf_backup = 0;
+  np->ignoreSignals = 0;
 
   np->stopped = 0;
 
@@ -366,8 +368,9 @@ scheduler(void)
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+      if(p->state != RUNNABLE) {
         continue;
+      }
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -492,9 +495,11 @@ wakeup1(void *chan)
 {
   struct proc *p;
 
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+    }
+  }
 }
 
 // Wake up all processes sleeping on chan.
@@ -533,10 +538,11 @@ kill(int pid, int signum)
           p->stopped = 1;
           break;
         case SIGCONT:
-          if (p->stopped != 1) {
+          if (p->stopped == 1) {
               p->pending_signals = (1 << signum) | p->pending_signals;
           }
           else {
+            // todo - needed??
               succ = 0;
           }
           break;
@@ -629,4 +635,99 @@ void sigret(void){
     // Need to restore the backup tf that was saved on the user stack
     p->tf->esp += 8;
     memmove(p->tf, (void *) p->tf->esp, sizeof(struct trapframe));
+
+    p->ignoreSignals = 0;
+}
+
+int push(struct cstack *cstack, int sender_pid, int recepient_pid, int value) {
+  struct proc *p;
+  int ans = 1;
+  // acquire(&ptable.lock);
+  struct cstackframe *newSig;
+  for (newSig = cstack->frames; newSig < cstack->frames + 10; newSig++){
+    if (cas(&newSig->used, 0, 1))
+      break;
+  }
+  if (newSig == cstack->frames + 10) { // stack is full
+    ans = 0;
+  }
+  else {
+    newSig->sender_pid = sender_pid;
+    newSig->recepient_pid = recepient_pid;
+    newSig->value = value;
+    do {
+      newSig->next = cstack->head;
+    } while (!cas((int*)&cstack->head, (int)newSig->next, (int)newSig));
+    for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+      if(p->pid == recepient_pid){
+        while (p->state == NEG_SLEEPING) {
+          // busy-wait
+        }
+        if (cas(&p->sigPauseInvoked, 1, 0)) // only one thread will change the state to RUNNABLE
+          p->state = RUNNABLE;
+        // if(p->sigPauseInvoked) {
+        //   p->state = RUNNABLE;
+        //   p->sigPauseInvoked = 0;
+        // }
+        break;
+      }
+    }
+  }
+  // release(&ptable.lock);
+  return ans;
+}
+
+struct cstackframe *pop(struct cstack *cstack) {
+  // acquire(&ptable.lock);
+  struct cstackframe *top;
+  do {
+    top = cstack->head;
+    if (top == 0)
+      break;
+  } while (!cas((int*)&cstack->head, (int)top, (int)top->next));
+  // release(&ptable.lock);
+  return top;
+}
+
+// todo unique-ify
+void checkSignals(struct trapframe *tf) {
+  struct proc *proc = myproc();
+
+  if (proc == 0)
+    return; // no proc is defined for this CPU
+  if (proc->ignoreSignals)
+    return; // currently handling a signal
+  if ((tf->cs & 3) != DPL_USER)
+    return; // CPU isn't at privilege level 3, hence in user mode
+  struct cstackframe *poppedCstack = pop(&proc->cstack);
+  if (poppedCstack == (struct cstackframe *) 0)
+    return; // no pending signals
+
+  // todo
+  // if(proc->sighandler == (sig_handler)-1)
+  //  return; // default signal handler, ignore the signal
+
+  for (int i = 0; i < 32; i++) {
+    if (((1 << 1) & proc->pending_signals) == 0) {
+      continue;
+    }
+    // todo lock
+    proc->pending_signals = (1 << i) ^ proc->pending_signals;
+
+    if (proc->signal_handlers[i] == SIG_DFL){
+      kill(proc->pid, i);
+      continue;
+    }
+
+    proc->ignoreSignals = 1;
+    memmove(&proc->tf_backup, proc->tf, sizeof(struct trapframe));//backing up trap frame
+    proc->tf->esp -= (uint) &invoke_sigret_end - (uint) &invoke_sigret_start;
+    memmove((void *) proc->tf->esp, invoke_sigret_start, (uint) &invoke_sigret_end - (uint) &invoke_sigret_start);
+    *((int *) (proc->tf->esp - 4)) = poppedCstack->value;
+    *((int *) (proc->tf->esp - 8)) = poppedCstack->sender_pid;
+    *((int *) (proc->tf->esp - 12)) = proc->tf->esp; // sigret system call code address
+    proc->tf->esp -= 12;
+    proc->tf->eip = (uint)proc->signal_handlers[i]; // trapret will resume into signal handler
+    poppedCstack->used = 0; // free the cstackframe
+  }
 }

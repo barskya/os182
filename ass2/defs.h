@@ -124,6 +124,8 @@ void            yield(void);
 uint            sigprocmask(uint sigmask);
 sighandler_t    signal(int signum, sighandler_t handler);
 void            sigret(void);
+void            invoke_sigret_start(void);
+void            invoke_sigret_end(void);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

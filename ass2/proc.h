@@ -32,7 +32,24 @@ struct context {
   uint eip;
 };
 
-enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+enum procstate { UNUSED, NEG_UNUSED, EMBRYO, SLEEPING, NEG_SLEEPING, RUNNABLE, NEG_RUNNABLE, RUNNING, ZOMBIE, NEG_ZOMBIE };
+
+// todo uinque-ify
+// entry in concurrent stack
+struct cstackframe {
+    int sender_pid;
+    int recepient_pid;
+    int value;
+    int used;
+    struct cstackframe *next;
+};
+
+// todo unique-ify
+// concurrent stack
+struct cstack {
+    struct cstackframe frames[10];
+    struct cstackframe *head;
+};
 
 // Per-process state
 struct proc {
@@ -56,6 +73,10 @@ struct proc {
   void* signal_handlers[32];
   struct trapframe* tf_backup;
   int stopped;
+    // todo unique-ify
+  int ignoreSignals;
+  int sigPauseInvoked;
+  struct cstack cstack;
 };
 
 // ass2
