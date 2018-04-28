@@ -38,10 +38,10 @@ struct cpu*
 mycpu(void)
 {
   int apicid, i;
-  
+
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
-  
+
   apicid = lapicid();
   // APIC IDs are not guaranteed to be contiguous. Maybe we should have
   // a reverse map, or reserve a register to store &cpus[i].
@@ -66,16 +66,36 @@ myproc(void) {
 }
 
 
-int 
-allocpid(void) 
+int
+allocpid(void)
 {
   int pid;
-  acquire(&ptable.lock);
-  pid = nextpid++;
-  release(&ptable.lock);
+  do {
+    pid = nextpid;
+  } while (!cas(&nextpid, pid, pid + 1));
   return pid;
 }
 
+void debug(char* txt){
+  // cprintf(txt);
+}
+
+void set_chan(struct proc *p, void* chan){
+  p->chan = chan;
+}
+
+int try_cas(struct proc *p, enum procstate from, enum procstate to){
+  int v = cas(&p->state, from, to);
+  if (v) {
+    // cprintf("%d : %d -> %d\n", p->pid, from, to);
+  }
+  return v;
+}
+
+void change_state(struct proc *p, enum procstate to){
+  // cprintf("%d : %d -> %d\n", p->pid, p->state, to);
+  p->state = to;
+}
 
 //PAGEBREAK: 32
 // Look in the process table for an UNUSED proc.
@@ -88,24 +108,23 @@ allocproc(void)
   struct proc *p;
   char *sp;
 
-  acquire(&ptable.lock);
+  pushcli();
+  do {
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+      if(p->state == UNUSED)
+        break;
+    if (p == &ptable.proc[NPROC]) {
+      popcli();
+      return 0; // ptable is full
+    }
+  } while (!try_cas(p, UNUSED, EMBRYO));
+  popcli();
 
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == UNUSED)
-      goto found;
-
-  release(&ptable.lock);
-  return 0;
-
-found:
-  p->state = EMBRYO;
-  release(&ptable.lock);
   p->pid = allocpid();
-
 
   // Allocate kernel stack.
   if((p->kstack = kalloc()) == 0){
-    p->state = UNUSED;
+    change_state(p, UNUSED);
     return 0;
   }
   sp = p->kstack + KSTACKSIZE;
@@ -153,11 +172,9 @@ userinit(void) {
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  // this assignment to p->state lets other cores
-  // run this process. the acquire forces the above
-  // writes to be visible, and the lock is also needed
-  // because the assignment might not be atomic.
-  acquire(&ptable.lock);
+  // todo make sure
+  //acquire(&ptable.lock);
+  pushcli();
 
   //ass2
   p->pending_signals = 0;
@@ -167,12 +184,13 @@ userinit(void) {
   }
   p->tf_backup = 0;
   p->ignoreSignals = 0;
-
   p->stopped = 0;
 
-  p->state = RUNNABLE;
+  change_state(p, RUNNABLE);
 
-  release(&ptable.lock);
+  // todo make sure
+  // release(&ptable.lock);
+  popcli();
 }
 
 // Grow current process's memory by n bytes.
@@ -202,6 +220,8 @@ growproc(int n)
 int
 fork(void)
 {
+  debug("fork\n");
+
   int i, pid;
   struct proc *np;
   struct proc *curproc = myproc();
@@ -215,7 +235,7 @@ fork(void)
   if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
     kfree(np->kstack);
     np->kstack = 0;
-    np->state = UNUSED;
+    change_state(np, UNUSED);
     return -1;
   }
   np->sz = curproc->sz;
@@ -234,7 +254,12 @@ fork(void)
 
   pid = np->pid;
 
-  acquire(&ptable.lock);
+  // todo make sure
+  // acquire(&ptable.lock);
+  pushcli();
+
+  if (!try_cas(np, EMBRYO, RUNNABLE))
+    panic("fork: cas failed");
 
   //ass2
   np->pending_signals = 0;
@@ -246,12 +271,11 @@ fork(void)
   }
   np->tf_backup = 0;
   np->ignoreSignals = 0;
-
   np->stopped = 0;
 
-  np->state = RUNNABLE;
-
-  release(&ptable.lock);
+  // todo make sure
+  // release(&ptable.lock);
+  popcli();
 
   return pid;
 }
@@ -262,6 +286,8 @@ fork(void)
 void
 exit(void)
 {
+  debug("exit\n");
+
   struct proc *curproc = myproc();
   struct proc *p;
   int fd;
@@ -282,7 +308,10 @@ exit(void)
   end_op();
   curproc->cwd = 0;
 
-  acquire(&ptable.lock);
+  pushcli();
+
+  if(!try_cas(curproc, RUNNING, NEG_ZOMBIE))
+    panic("exit: cas #1 failed");
 
   // Parent might be sleeping in wait().
   wakeup1(curproc->parent);
@@ -291,35 +320,64 @@ exit(void)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->parent == curproc){
       p->parent = initproc;
-      if(p->state == ZOMBIE)
+      if(p->state == ZOMBIE || p->state == NEG_ZOMBIE) {
         wakeup1(initproc);
+      }
     }
   }
 
   // Jump into the scheduler, never to return.
-  curproc->state = ZOMBIE;
   sched();
   panic("zombie exit");
 }
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int
-wait(void)
-{
+int wait(void)  {
+  debug("wait\n");
+
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
-  
-  acquire(&ptable.lock);
+
+  pushcli();
+
+  /*
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == SLEEPING){
+      int found = 0;
+      for(struct proc* p_temp = ptable.proc; p_temp < &ptable.proc[NPROC]; p_temp++) {
+        if (p == p_temp){
+          continue;
+        }
+        if (p->chan == &p_temp){
+          found = 1;
+        }
+      }
+      if (found == 0){
+        change_state(p, ZOMBIE);
+      }
+    }
+  }
+  */
+
   for(;;){
-    // Scan through table looking for exited children.
+    debug("Entering infinite wait\n");
+    // procdump();
+
+    if (!try_cas(curproc, RUNNING, NEG_SLEEPING)) {
+      // todo tweak
+      panic("scheduler: cas failed");
+    }
+
+    set_chan(curproc, curproc);
+
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->parent != curproc)
         continue;
       havekids = 1;
-      if(p->state == ZOMBIE){
+      if(try_cas(p, ZOMBIE, UNUSED)){
         // Found one.
         pid = p->pid;
         kfree(p->kstack);
@@ -329,20 +387,29 @@ wait(void)
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
-        p->state = UNUSED;
-        release(&ptable.lock);
+
+        set_chan(curproc, 0);
+        try_cas(curproc, NEG_SLEEPING, RUNNING);
+
+        popcli();
+
         return pid;
       }
     }
 
     // No point waiting if we don't have any children.
     if(!havekids || curproc->killed){
-      release(&ptable.lock);
+      set_chan(curproc, 0);
+      if (!try_cas(curproc, NEG_SLEEPING, RUNNING)) {
+        // todo tweak
+        panic("wait: CAS from NEG_SLEEPING to RUNNING failed");
+      }
+
+      popcli();
       return -1;
     }
 
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+    sched();
   }
 }
 
@@ -354,21 +421,23 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
-void
-scheduler(void)
-{
+void scheduler(void)  {
+  // debug("scheduler\n");
+
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
     // Loop over process table looking for process to run.
-    acquire(&ptable.lock);
+    // todo make sure
+    // acquire(&ptable.lock);
+    pushcli();
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE) {
+      if(!try_cas(p, RUNNABLE, RUNNING)) {
         continue;
       }
 
@@ -377,7 +446,6 @@ scheduler(void)
       // before jumping back to us.
       c->proc = p;
       switchuvm(p);
-      p->state = RUNNING;
 
       swtch(&(c->scheduler), p->context);
       switchkvm();
@@ -385,9 +453,23 @@ scheduler(void)
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
-    }
-    release(&ptable.lock);
 
+      if (try_cas(p, NEG_SLEEPING, SLEEPING)) {
+        if (p->killed == 1) {
+          try_cas(p, SLEEPING, RUNNABLE);
+        }
+      }
+      if (try_cas(p, NEG_RUNNABLE, RUNNABLE)) {
+      }
+      // todo
+      if (try_cas(p, NEG_ZOMBIE, ZOMBIE)) {
+        // set_chan(p, 0);
+        wakeup1(p->parent);
+      }
+    }
+    // todo make sure
+    // release(&ptable.lock);
+    popcli();
   }
 }
 
@@ -398,14 +480,14 @@ scheduler(void)
 // be proc->intena and proc->ncli, but that would
 // break in the few places where a lock is held but
 // there's no process.
-void
-sched(void)
-{
+void sched(void) {
+  // debug("sched\n");
+
   int intena;
   struct proc *p = myproc();
 
-  if(!holding(&ptable.lock))
-    panic("sched ptable.lock");
+  //if(!holding(&ptable.lock))
+  //  panic("sched ptable.lock");
   if(mycpu()->ncli != 1)
     panic("sched locks");
   if(p->state == RUNNING)
@@ -418,23 +500,24 @@ sched(void)
 }
 
 // Give up the CPU for one scheduling round.
-void
-yield(void)
-{
-  acquire(&ptable.lock);  //DOC: yieldlock
-  myproc()->state = RUNNABLE;
+void yield(void) {
+  // debug("yield\n");
+
+  pushcli();
+  if (!try_cas(myproc(), RUNNING, NEG_RUNNABLE))
+    panic("yield: cas failed");
   sched();
-  release(&ptable.lock);
+  popcli();
 }
 
 // A fork child's very first scheduling by scheduler()
 // will swtch here.  "Return" to user space.
-void
-forkret(void)
-{
+void forkret(void) {
+  debug("forkret \n");
+
   static int first = 1;
   // Still holding ptable.lock from scheduler.
-  release(&ptable.lock);
+  popcli();
 
   if (first) {
     // Some initialization functions must be run in the context
@@ -450,112 +533,136 @@ forkret(void)
 
 // Atomically release lock and sleep on chan.
 // Reacquires lock when awakened.
-void
-sleep(void *chan, struct spinlock *lk)
-{
+void sleep(void *chan, struct spinlock *lk) {
+  // debug("sleep \n");
+
   struct proc *p = myproc();
-  
+
   if(p == 0)
     panic("sleep");
 
   if(lk == 0)
     panic("sleep without lk");
 
-  // Must acquire ptable.lock in order to
-  // change p->state and then call sched.
-  // Once we hold ptable.lock, we can be
-  // guaranteed that we won't miss any wakeup
-  // (wakeup runs with ptable.lock locked),
-  // so it's okay to release lk.
-  if(lk != &ptable.lock){  //DOC: sleeplock0
-    acquire(&ptable.lock);  //DOC: sleeplock1
-    release(lk);
-  }
-  // Go to sleep.
-  p->chan = chan;
-  p->state = SLEEPING;
+  pushcli();
+  release(lk);
 
+  if (!try_cas(p, RUNNING, NEG_SLEEPING))
+    panic("sleep: cas failed");
+
+  set_chan(p, chan);
   sched();
+  set_chan(p, 0);
 
-  // Tidy up.
-  p->chan = 0;
-
-  // Reacquire original lock.
-  if(lk != &ptable.lock){  //DOC: sleeplock2
-    release(&ptable.lock);
-    acquire(lk);
-  }
+  popcli();
+  acquire(lk);
 }
 
 //PAGEBREAK!
 // Wake up all processes sleeping on chan.
 // The ptable lock must be held.
-static void
-wakeup1(void *chan)
-{
-  struct proc *p;
+static void wakeup1(void *chan) {
+  // debug("wakeup1\n");
 
+  struct proc *p;
+  pushcli();
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-    if (p->state == SLEEPING && p->chan == chan) {
-      p->state = RUNNABLE;
+    if (p->chan == chan && (p->state == SLEEPING || p->state == NEG_SLEEPING)) {
+      while (p->state == NEG_SLEEPING) {
+        // busy-wait
+      }
+      if (try_cas(p, SLEEPING, NEG_RUNNABLE)) {
+        set_chan(p, 0);
+        if (!try_cas(p, NEG_RUNNABLE, RUNNABLE)) {
+          panic("wakeup1: cas failed");
+        }
+      }
     }
   }
+  popcli();
 }
 
 // Wake up all processes sleeping on chan.
-void
-wakeup(void *chan)
-{
-  acquire(&ptable.lock);
+void wakeup(void *chan) {
+  // debug("wakeup\n");
+
+  pushcli();
   wakeup1(chan);
-  release(&ptable.lock);
+  popcli();
 }
 
 // Kill the process with the given pid.
 // Process won't exit until it returns
 // to user space (see trap in trap.c).
-int
-kill(int pid, int signum)
-{
+int kill(int pid, int signum) {
+  /*
   struct proc *p;
 
-  int succ = 1;
-
-  acquire(&ptable.lock);
+  pushcli();
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->pid == pid){
+      p->killed = 1;
+      // Wake process from sleep if necessary.
+      try_cas(p, SLEEPING, RUNNABLE);
+      popcli();
+      return 0;
+    }
+  }
+  popcli();
+  return -1;
+  */
 
-      switch(signum) {
+
+
+  // signum = 9;
+
+  debug("kill %d\n");
+
+  struct proc *p;
+
+  pushcli();
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->pid == pid) {
+
+      //uint pc[10];
+      cprintf("%d and %d\n", signum, SIGKILL);
+      //getcallerpcs((uint*)p->context->ebp+2, pc);
+      //for(int i=0; i<10 && pc[i] != 0; i++)
+      //  cprintf(" %p", pc[i]);
+
+      switch (signum) {
         case SIGKILL:
           p->killed = 1;
+          //set_chan(p, 0);
+          try_cas(p, SLEEPING, RUNNABLE);
 
-          // Wake process from sleep if necessary.
-          if(p->state == SLEEPING) {
-              p->state = RUNNABLE;
-          }
-          break;
+          popcli();
+          return 0;
         case SIGSTOP:
           p->stopped = 1;
-          break;
+
+          popcli();
+          return 0;
         case SIGCONT:
           if (p->stopped == 1) {
-              p->pending_signals = (1 << signum) | p->pending_signals;
-          }
-          else {
-            // todo - needed??
-              succ = 0;
-          }
-          break;
-        default:
             p->pending_signals = (1 << signum) | p->pending_signals;
+
+            popcli();
+            return 0;
+          }
+
+          popcli();
+          return -1;
+        default:
+          p->pending_signals = (1 << signum) | p->pending_signals;
+
+          popcli();
+          return 0;
       }
     }
   }
 
-  release(&ptable.lock);
-  if (succ == 1){
-    return 0;
-  }
+  popcli();
   return -1;
 }
 
@@ -563,16 +670,18 @@ kill(int pid, int signum)
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
 // No lock to avoid wedging a stuck machine further.
-void
-procdump(void)
-{
+void procdump(void) {
   static char *states[] = {
-  [UNUSED]    "unused",
-  [EMBRYO]    "embryo",
-  [SLEEPING]  "sleep ",
-  [RUNNABLE]  "runble",
-  [RUNNING]   "run   ",
-  [ZOMBIE]    "zombie"
+              [UNUSED]        "unused",
+              [NEG_UNUSED]    "neg_unused",
+              [EMBRYO]        "embryo",
+              [SLEEPING]      "sleep ",
+              [NEG_SLEEPING]  "neg_sleep",
+              [RUNNABLE]      "runble",
+              [NEG_RUNNABLE]  "neg_runble",
+              [RUNNING]       "run   ",
+              [ZOMBIE]        "zombie",
+              [NEG_ZOMBIE]    "neg_zombie"
   };
   int i;
   struct proc *p;
@@ -586,11 +695,12 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    cprintf("%d %d %s %s", p, p->pid, state, p->name);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
         cprintf(" %p", pc[i]);
+      cprintf(" chan = %d", p->chan);
     }
     cprintf("\n");
   }
@@ -600,10 +710,10 @@ procdump(void)
 uint sigprocmask(uint sigmask){
     struct proc* p = myproc();
 
-    acquire(&ptable.lock);
+    pushcli();
     uint current_signal_mask = p->signal_mask;
     p->signal_mask = sigmask;
-    release(&ptable.lock);
+    popcli();
 
     return current_signal_mask;
 }
@@ -619,115 +729,107 @@ sighandler_t signal(int signum, sighandler_t handler){
     }
 
     // input is fine, change the handler
-    acquire(&ptable.lock);
+    pushcli();
     old_handler = p->signal_handlers[signum];
     p->signal_handlers[signum] = handler;
-    release(&ptable.lock);
+    popcli();
 
     return old_handler;
 }
 
 void sigret(void){
-    // todo - update backup?
-
     struct proc* p = myproc();
-
-    // Need to restore the backup tf that was saved on the user stack
-    p->tf->esp += 8;
-    memmove(p->tf, (void *) p->tf->esp, sizeof(struct trapframe));
-
+    memmove(p->tf, p->tf_backup, sizeof(struct trapframe));
     p->ignoreSignals = 0;
 }
 
-int push(struct cstack *cstack, int sender_pid, int recepient_pid, int value) {
-  struct proc *p;
-  int ans = 1;
-  // acquire(&ptable.lock);
-  struct cstackframe *newSig;
-  for (newSig = cstack->frames; newSig < cstack->frames + 10; newSig++){
-    if (cas(&newSig->used, 0, 1))
-      break;
-  }
-  if (newSig == cstack->frames + 10) { // stack is full
-    ans = 0;
-  }
-  else {
-    newSig->sender_pid = sender_pid;
-    newSig->recepient_pid = recepient_pid;
-    newSig->value = value;
-    do {
-      newSig->next = cstack->head;
-    } while (!cas((int*)&cstack->head, (int)newSig->next, (int)newSig));
-    for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-      if(p->pid == recepient_pid){
-        while (p->state == NEG_SLEEPING) {
-          // busy-wait
-        }
-        if (cas(&p->sigPauseInvoked, 1, 0)) // only one thread will change the state to RUNNABLE
-          p->state = RUNNABLE;
-        // if(p->sigPauseInvoked) {
-        //   p->state = RUNNABLE;
-        //   p->sigPauseInvoked = 0;
-        // }
-        break;
-      }
-    }
-  }
-  // release(&ptable.lock);
-  return ans;
-}
-
-struct cstackframe *pop(struct cstack *cstack) {
-  // acquire(&ptable.lock);
-  struct cstackframe *top;
-  do {
-    top = cstack->head;
-    if (top == 0)
-      break;
-  } while (!cas((int*)&cstack->head, (int)top, (int)top->next));
-  // release(&ptable.lock);
-  return top;
-}
-
-// todo unique-ify
 void checkSignals(struct trapframe *tf) {
-  struct proc *proc = myproc();
+  struct proc *p = myproc();
 
-  if (proc == 0)
+  if (p == 0)
     return; // no proc is defined for this CPU
-  if (proc->ignoreSignals)
+  if (p->ignoreSignals)
     return; // currently handling a signal
   if ((tf->cs & 3) != DPL_USER)
     return; // CPU isn't at privilege level 3, hence in user mode
-  struct cstackframe *poppedCstack = pop(&proc->cstack);
-  if (poppedCstack == (struct cstackframe *) 0)
-    return; // no pending signals
 
-  // todo
-  // if(proc->sighandler == (sig_handler)-1)
-  //  return; // default signal handler, ignore the signal
+  if (p->stopped && (tf->cs & 3) == DPL_USER) {
+    while (1) {
+      if (p->pending_signals & (1 << SIGCONT)) {
+        pushcli();
+        if (cas(&p->stopped, 1, 0)) {
+          p->pending_signals = (1 << SIGCONT) ^ p->pending_signals;
+        }
+        popcli();
+        break;
+      } else {
+        yield();
+      }
+    }
+  }
 
   for (int i = 0; i < 32; i++) {
-    if (((1 << 1) & proc->pending_signals) == 0) {
+    if (((1 << 1) & p->pending_signals) == 0) {
       continue;
     }
-    // todo lock
-    proc->pending_signals = (1 << i) ^ proc->pending_signals;
+    p->pending_signals = (1 << i) ^ p->pending_signals;
 
-    if (proc->signal_handlers[i] == SIG_DFL){
-      kill(proc->pid, i);
+    if (p->signal_handlers[i] == (void*)SIG_IGN) {
       continue;
     }
 
-    proc->ignoreSignals = 1;
-    memmove(&proc->tf_backup, proc->tf, sizeof(struct trapframe));//backing up trap frame
-    proc->tf->esp -= (uint) &invoke_sigret_end - (uint) &invoke_sigret_start;
-    memmove((void *) proc->tf->esp, invoke_sigret_start, (uint) &invoke_sigret_end - (uint) &invoke_sigret_start);
-    *((int *) (proc->tf->esp - 4)) = poppedCstack->value;
-    *((int *) (proc->tf->esp - 8)) = poppedCstack->sender_pid;
-    *((int *) (proc->tf->esp - 12)) = proc->tf->esp; // sigret system call code address
-    proc->tf->esp -= 12;
-    proc->tf->eip = (uint)proc->signal_handlers[i]; // trapret will resume into signal handler
-    poppedCstack->used = 0; // free the cstackframe
+    if (p->signal_handlers[i] == (void*)SIG_DFL) {
+      cprintf("passing sigkill - %d\n", SIGKILL);
+      kill(p->pid, SIGKILL);
+      continue;
+    }
+
+    if ((tf->cs & 3) == DPL_USER && myproc() != 0 && (myproc()->pending_signals & (1 << i))) {
+      pushcli();
+      if (cas(&myproc()->ignoreSignals, 1, 0)) {
+        myproc()->pending_signals = (1 << i) ^ myproc()->pending_signals;
+      }
+      popcli();
+    }
+
+    cprintf("AAAAAAA\n");
+
+    p->ignoreSignals = 1;
+
+    uint sigret_size;
+    sigret_size = (uint) invoke_sigret_end - (uint) invoke_sigret_start;
+
+    // address on code on stack to return to
+    uint sigret_address = p->tf->esp - sigret_size;
+
+    p->tf_backup = (struct trapframe *) p->tf->esp - sizeof(struct trapframe) - sigret_size;
+
+    // copying the tf to the stack
+    memmove(p->tf_backup, p->tf, sizeof(struct trapframe));
+    // copying the code to the stack
+    memmove((void *) sigret_address, invoke_sigret_start, sigret_size);
+
+    p->tf->esp -= (sizeof(struct trapframe) + sigret_size);
+
+    *(int *) (p->tf->esp - 4) = i;
+    *(int *) (p->tf->esp - 8) = sigret_address;
+
+    p->tf->esp = p->tf->esp - 8 + sizeof(struct trapframe) + sigret_size;
+
+    p->tf->eip = (uint) p->signal_handlers[i];
+    break;
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
