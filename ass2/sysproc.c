@@ -35,7 +35,7 @@ sys_kill(void)
   if(argint(0, &pid) < 0)
     return -1;
 
-  if(argint(0, &signum) < 0)
+  if(argint(1, &signum) < 0)
     return -1;
 
   return kill(pid, signum);
@@ -55,9 +55,12 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
+
   addr = myproc()->sz;
+
   if(growproc(n) < 0)
     return -1;
+
   return addr;
 }
 
@@ -72,7 +75,9 @@ sys_sleep(void)
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
-    if(myproc()->killed){
+    struct proc* p = myproc();
+
+    if( p->killed ) { //|| SIGKILL ^ p->pending_signals){
       release(&tickslock);
       return -1;
     }

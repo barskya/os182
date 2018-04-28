@@ -1745,6 +1745,52 @@ rand()
   return randstate;
 }
 
+//tests masking (calc1 doesnt stop even when the signal for foo arrives)
+//2 signals being processed in turn.
+int signaltest1(){
+  /*
+  printf(2, "ff");
+  //sighandler_t f = &foo;
+  int pid=fork();
+  if(pid == 0){//child
+    signal(10, calc1); //associate signal number 10 with the function foo
+    signal(11, foo); //associate signal number 10 with the function foo
+    sleep(200);
+
+  }
+  else{
+    sleep(30);//so the child can prepare for the signals
+    kill(getpid()+1, 10);
+    kill(getpid()+1, 11); //send the signal number 10 to the child
+    //sleep(500);
+    //kill(getpid()+1, 9); //kill the child
+    wait();
+    return 1;
+  }
+   */
+  return 1;
+}
+
+void sanity1() {
+  int pid = fork();
+  if (pid == 0){
+    int c = 0;
+    do {
+      c++;
+      if (c % 1000 == 0){
+        // printf(2, "Child still going\n");
+      }
+    } while (1);
+    exit();
+  }
+  else{
+    sleep(10);
+    kill(pid, 9);
+    wait();
+    exit();
+  }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1755,6 +1801,21 @@ main(int argc, char *argv[])
     exit();
   }
   close(open("usertests.ran", O_CREATE));
+
+  //sanity1();
+
+  //signal(1, 0);
+  //signaltest1();
+  //signaltest2();
+  //signaltest3();
+
+  //killtest();
+  //stopconttest();
+
+  //////////////
+  //////////////
+  //////////////
+  //////////////
 
   argptest();
   createdelete();

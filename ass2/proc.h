@@ -32,7 +32,19 @@ struct context {
   uint eip;
 };
 
-enum procstate { UNUSED, NEG_UNUSED, EMBRYO, SLEEPING, NEG_SLEEPING, RUNNABLE, NEG_RUNNABLE, RUNNING, ZOMBIE, NEG_ZOMBIE };
+enum procstate {  UNUSED, // 0
+                  NEG_UNUSED, // 1
+                  EMBRYO, // 2
+                  SLEEPING, // 3
+                  NEG_SLEEPING, // 4
+                  RUNNABLE, // 5
+                  NEG_RUNNABLE, // 6
+                  RUNNING, // 7
+                  ZOMBIE, // 8
+                  NEG_ZOMBIE  // 9
+               };
+
+void freeproc2(struct proc *p);
 
 // todo uinque-ify
 // entry in concurrent stack
@@ -75,7 +87,6 @@ struct proc {
   int stopped;
     // todo unique-ify
   int ignoreSignals;
-  int sigPauseInvoked;
   struct cstack cstack;
 };
 
