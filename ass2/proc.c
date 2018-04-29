@@ -183,7 +183,7 @@ userinit(void) {
     p->signal_handlers[i] = SIG_DFL;
   }
   p->tf_backup = 0;
-  p->ignoreSignals = 0;
+  p->ignore_signals = 0;
   p->stopped = 0;
 
   change_state(p, RUNNABLE);
@@ -270,7 +270,7 @@ fork(void)
      np->signal_handlers[i] = curproc->signal_handlers[i];
   }
   np->tf_backup = 0;
-  np->ignoreSignals = 0;
+  np->ignore_signals = 0;
   np->stopped = 0;
 
   // todo make sure
@@ -612,60 +612,62 @@ int kill(int pid, int signum) {
   return -1;
   */
 
-
-
-  // signum = 9;
-
-  debug("kill %d\n");
-
   struct proc *p;
 
   pushcli();
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-    if (p->pid == pid) {
-
-      //uint pc[10];
-      cprintf("%d and %d\n", signum, SIGKILL);
-      //getcallerpcs((uint*)p->context->ebp+2, pc);
-      //for(int i=0; i<10 && pc[i] != 0; i++)
-      //  cprintf(" %p", pc[i]);
-
-      switch (signum) {
-        case SIGKILL:
-          p->killed = 1;
-          //set_chan(p, 0);
-          try_cas(p, SLEEPING, RUNNABLE);
-
-          popcli();
-          return 0;
-        case SIGSTOP:
-          p->stopped = 1;
-
-          popcli();
-          return 0;
-        case SIGCONT:
-          if (p->stopped == 1) {
-            p->pending_signals = (1 << signum) | p->pending_signals;
-
-            popcli();
-            return 0;
-          }
-
-          popcli();
-          return -1;
-        default:
-          p->pending_signals = (1 << signum) | p->pending_signals;
-
-          popcli();
-          return 0;
-      }
+    if (p->pid != pid) {
+      continue;
     }
+    //uint pc[10];
+    // cprintf("%d and %d\n", signum, SIGKILL);
+    // getcallerpcs((uint*)p->context->ebp+2, pc);
+    // for(int i=0; i<10 && pc[i] != 0; i++)
+    //  cprintf(" %p", pc[i]);
+
+    switch (signum) {
+      case SIGKILL:
+        cprintf("SIGKILL %d\n", pid);
+        p->killed = 1;
+        //set_chan(p, 0);
+        try_cas(p, SLEEPING, RUNNABLE);
+
+        popcli();
+        return 0;
+      case SIGSTOP:
+        cprintf("SIGSTOP %d\n", pid);
+        p->stopped = 1;
+
+        popcli();
+        return 0;
+      case SIGCONT:
+        cprintf("SIGCONT %d\n", pid);
+        if (p->stopped == 1) {
+          uint new_pending_signals = p->pending_signals | (1 << signum);
+
+          cprintf("updating pending signals from %d to %d\n", p->pending_signals, new_pending_signals);
+
+          p->pending_signals = new_pending_signals;
+
+          popcli();
+          return 0;
+        }
+
+        popcli();
+        return -1;
+      default:
+        cprintf("kill pid=%d signum=%d\n", pid, signum);
+        p->pending_signals |= (1 << signum);
+
+        popcli();
+        return 0;
+    }
+
   }
 
   popcli();
   return -1;
 }
-
 //PAGEBREAK: 36
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
@@ -737,29 +739,50 @@ sighandler_t signal(int signum, sighandler_t handler){
     return old_handler;
 }
 
-void sigret(void){
-    struct proc* p = myproc();
-    memmove(p->tf, p->tf_backup, sizeof(struct trapframe));
-    p->ignoreSignals = 0;
+void sigret(void) {
+  pushcli();
+  struct proc *p = myproc();
+  memmove(p->tf, p->tf_backup, sizeof(struct trapframe));
+  p->tf->esp += sizeof (struct trapframe);
+  p->ignore_signals = 0;
+  popcli();
+  cprintf("Done sigret.\n");
 }
 
 void checkSignals(struct trapframe *tf) {
   struct proc *p = myproc();
 
-  if (p == 0)
-    return; // no proc is defined for this CPU
-  if (p->ignoreSignals)
-    return; // currently handling a signal
-  if ((tf->cs & 3) != DPL_USER)
-    return; // CPU isn't at privilege level 3, hence in user mode
+  if (p == 0){
+    return;
+  }
 
-  if (p->stopped && (tf->cs & 3) == DPL_USER) {
+  if (p->ignore_signals){
+    return;
+  }
+
+  //if ((tf->cs & 3) != DPL_USER)
+  //  return; // CPU isn't at privilege level 3, hence in user mode
+
+  // cprintf("pook %d %d %d\n", p->pid, p->stopped, (tf->cs & 3) == DPL_USER);
+
+  //if (p->stopped && (tf->cs & 3) == DPL_USER) {
+  if (p->stopped) {
+    cprintf("pook a - %d\n", p->pid);
     while (1) {
-      if (p->pending_signals & (1 << SIGCONT)) {
+      uint cont = (1 << SIGCONT);
+      int cont_pending = p->pending_signals & cont;
+      for (int j = 0; j < 1000000; j++) {
+
+      }
+      // cprintf("checking if %d is in %d, result = %d\n", cont, p->pending_signals, cont_pending);
+      if (cont_pending) {
+        cprintf("pook c");
         pushcli();
         if (cas(&p->stopped, 1, 0)) {
+          cprintf("pook d");
           p->pending_signals = (1 << SIGCONT) ^ p->pending_signals;
         }
+        cprintf("pook e");
         popcli();
         break;
       } else {
@@ -768,10 +791,15 @@ void checkSignals(struct trapframe *tf) {
     }
   }
 
+  if (p->stopped){
+    return;
+  }
+
   for (int i = 0; i < 32; i++) {
-    if (((1 << 1) & p->pending_signals) == 0) {
+    if (((1 << i) & p->pending_signals) == 0) {
       continue;
     }
+    cprintf("BOOM\n");
     p->pending_signals = (1 << i) ^ p->pending_signals;
 
     if (p->signal_handlers[i] == (void*)SIG_IGN) {
@@ -779,23 +807,22 @@ void checkSignals(struct trapframe *tf) {
     }
 
     if (p->signal_handlers[i] == (void*)SIG_DFL) {
-      cprintf("passing sigkill - %d\n", SIGKILL);
       kill(p->pid, SIGKILL);
       continue;
     }
 
     if ((tf->cs & 3) == DPL_USER && myproc() != 0 && (myproc()->pending_signals & (1 << i))) {
       pushcli();
-      if (cas(&myproc()->ignoreSignals, 1, 0)) {
+      if (cas(&myproc()->ignore_signals, 1, 0)) {
+        cprintf("BOOOM 2\n");
         myproc()->pending_signals = (1 << i) ^ myproc()->pending_signals;
       }
       popcli();
     }
 
-    cprintf("AAAAAAA\n");
+    p->ignore_signals = 1;
 
-    p->ignoreSignals = 1;
-
+    /*
     uint sigret_size;
     sigret_size = (uint) invoke_sigret_end - (uint) invoke_sigret_start;
 
@@ -816,6 +843,22 @@ void checkSignals(struct trapframe *tf) {
 
     p->tf->esp = p->tf->esp - 8 + sizeof(struct trapframe) + sigret_size;
 
+    p->tf->eip = (uint) p->signal_handlers[i];
+    */
+
+    p->tf->esp -= sizeof (struct trapframe); //make room in the stack for the backup trapframe (sizeof trapframe)
+    memmove((void*)(p->tf->esp), p->tf, sizeof (struct trapframe));  //move the current trapframe memory block into here.
+    p->tf_backup = (void*)(p->tf->esp);
+
+    uint length = (uint)&invoke_sigret_end - (uint)&invoke_sigret_start;
+    p->tf->esp -= length; //clear space in the stack for sigret code
+    memmove((void*)(p->tf->esp), invoke_sigret_start, length);  //memmove the data from sigretstart address
+
+    *((int*) (p->tf->esp - 4)) = i; //push argument
+    *((int*) (p->tf->esp - 8)) = p->tf->esp; //push return address
+    p->tf->esp -= 8;
+    //cprintf("changing IP, signum: %d\1
+    // n",  signum);
     p->tf->eip = (uint) p->signal_handlers[i];
     break;
   }

@@ -7,6 +7,11 @@
 #include "syscall.h"
 #include "traps.h"
 #include "memlayout.h"
+// #include "proc.h"
+
+#define SIGKILL 9
+#define SIGSTOP 17
+#define SIGCONT 19
 
 char buf[8192];
 char name[3];
@@ -1745,40 +1750,14 @@ rand()
   return randstate;
 }
 
-//tests masking (calc1 doesnt stop even when the signal for foo arrives)
-//2 signals being processed in turn.
-int signaltest1(){
-  /*
-  printf(2, "ff");
-  //sighandler_t f = &foo;
-  int pid=fork();
-  if(pid == 0){//child
-    signal(10, calc1); //associate signal number 10 with the function foo
-    signal(11, foo); //associate signal number 10 with the function foo
-    sleep(200);
-
-  }
-  else{
-    sleep(30);//so the child can prepare for the signals
-    kill(getpid()+1, 10);
-    kill(getpid()+1, 11); //send the signal number 10 to the child
-    //sleep(500);
-    //kill(getpid()+1, 9); //kill the child
-    wait();
-    return 1;
-  }
-   */
-  return 1;
-}
-
 void sanity1() {
   int pid = fork();
   if (pid == 0){
     int c = 0;
     do {
       c++;
-      if (c % 1000 == 0){
-        // printf(2, "Child still going\n");
+      if (c % 10000 == 0){
+        printf(2, "Child still going\n");
       }
     } while (1);
     exit();
@@ -1787,12 +1766,139 @@ void sanity1() {
     sleep(10);
     kill(pid, 9);
     wait();
-    exit();
+    printf(2, "\n\nDone sanity1\n");
   }
 }
 
-int
-main(int argc, char *argv[])
+void sanity2() {
+  for (int i = 0; i < 10; i++) {
+    int pid = fork();
+    if (pid == 0) {
+      for (int j = 0; j < 10; j++) {
+        printf(1, ".");
+      }
+      exit();
+    }
+  }
+  sleep(10);
+  wait();
+  printf(2, "Done sanity2\n");
+}
+
+void sanity3() {
+  for (int i = 0; i < 10; i++) {
+    int pid = fork();
+    if (pid == 0) {
+      fork();
+      for (int j = 0; j < 10; j++) {
+        printf(1, ".");
+      }
+      exit();
+    }
+  }
+  wait();
+  printf(2, "Done sanity3\n");
+}
+
+void foo(int x) {
+  printf(2, "x = %d\n", x);
+}
+
+void bar(int y){
+  printf(2, "y = %d\n", y);
+}
+
+void sanity4(){
+  int pid = fork();
+  if (pid == 0) {
+    signal(10, foo);
+    while(1) {}
+  }
+
+  sleep(10);
+  kill(pid, 10);
+  wait();
+  kill(pid, 9);
+  printf(2, "Done sanity4\n");
+}
+
+void sanity5(){
+  int pid = fork();
+  if (pid == 0){
+    signal(10, foo);
+    signal(11, bar);
+    for(int i=0; i <= 10000; i++){
+
+    }
+    exit();
+  }
+
+  printf(2, "child pid =1 %d\n", pid);
+  sleep(10);
+  kill(pid, 10);
+  wait();
+  kill(pid, 11);
+  wait();
+  kill(pid, 9);
+  printf(2, "Done sanity4\n");
+}
+
+void sanity6(){
+  int pid = fork();
+  if (pid == 0){
+    signal(10, foo);
+    for(int i=0; i <= 100000; i++){
+      if (i % 1000 == 0){
+        printf(2, "sanity child, i = %d\n", i);
+      }
+    }
+    exit();
+  }
+
+  printf(2, "child pid = %d\n", pid);
+  sleep(10);
+  kill(pid, 10);
+  wait();
+  sleep(10);
+  kill(pid, 10);
+  wait();
+  kill(pid, 9);
+  printf(2, "Done sanity4\n");
+}
+
+// pause \ cont
+void sanity7(){
+  int pid = fork();
+  if (pid == 0){
+    for(int i=0; i <= 100000; i++){
+      if (i % 1000 == 0){
+        printf(2, "child, i = %d\n", i);
+      }
+    }
+    exit();
+  }
+
+  sleep(10);
+  kill(pid, SIGSTOP);
+  for(int i=0; i <= 100; i++){
+    if (i % 10 == 0){
+      printf(2, "parent, i = %d\n", i);
+    }
+    sleep(1);
+  }
+  kill(pid, SIGCONT);
+  for(int i=0; i <= 100; i++){
+    if (i % 10 == 0){
+      printf(2, "parent, i = %d\n", i);
+    }
+    sleep(1);
+  }
+  sleep(5);
+  kill(pid, SIGKILL);
+  printf(2, "Done sanity4\n");
+}
+
+int main(int argc, char *argv[])
 {
   printf(1, "usertests starting\n");
 
@@ -1803,20 +1909,18 @@ main(int argc, char *argv[])
   close(open("usertests.ran", O_CREATE));
 
   //sanity1();
-
-  //signal(1, 0);
-  //signaltest1();
-  //signaltest2();
-  //signaltest3();
-
-  //killtest();
-  //stopconttest();
+  //sanity2();
+  //sanity3();
+  //sanity4();
+  //sanity5();
+  //sanity6();
+  sanity7();
 
   //////////////
   //////////////
   //////////////
   //////////////
-
+/*
   argptest();
   createdelete();
   linkunlink();
@@ -1859,6 +1963,6 @@ main(int argc, char *argv[])
   uio();
 
   exectest();
-
+*/
   exit();
 }
