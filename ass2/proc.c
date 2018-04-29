@@ -335,25 +335,6 @@ int wait(void)  {
 
   pushcli();
 
-  /*
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-    if (p->state == SLEEPING){
-      int found = 0;
-      for(struct proc* p_temp = ptable.proc; p_temp < &ptable.proc[NPROC]; p_temp++) {
-        if (p == p_temp){
-          continue;
-        }
-        if (p->chan == &p_temp){
-          found = 1;
-        }
-      }
-      if (found == 0){
-        change_state(p, ZOMBIE);
-      }
-    }
-  }
-  */
-
   for(;;){
     debug("Entering infinite wait\n");
     //procdump();
@@ -583,23 +564,6 @@ void wakeup(void *chan) {
 // Process won't exit until it returns
 // to user space (see trap in trap.c).
 int kill(int pid, int signum) {
-  /*
-  struct proc *p;
-
-  pushcli();
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->pid == pid){
-      p->killed = 1;
-      // Wake process from sleep if necessary.
-      try_cas(p, SLEEPING, RUNNABLE);
-      popcli();
-      return 0;
-    }
-  }
-  popcli();
-  return -1;
-  */
-
   struct proc *p;
 
   pushcli();
@@ -615,7 +579,7 @@ int kill(int pid, int signum) {
 
     switch (signum) {
       case SIGKILL:
-        cprintf("SIGKILL %d\n", pid);
+        // cprintf("SIGKILL %d\n", pid);
         p->killed = 1;
         //set_chan(p, 0);
         try_cas(p, SLEEPING, RUNNABLE);
@@ -623,17 +587,17 @@ int kill(int pid, int signum) {
         popcli();
         return 0;
       case SIGSTOP:
-        cprintf("SIGSTOP %d\n", pid);
+        // cprintf("SIGSTOP %d\n", pid);
         p->stopped = 1;
 
         popcli();
         return 0;
       case SIGCONT:
-        cprintf("SIGCONT %d\n", pid);
+        // cprintf("SIGCONT %d\n", pid);
         if (p->stopped == 1) {
           uint new_pending_signals = p->pending_signals | (1 << signum);
 
-          cprintf("updating pending signals from %d to %d\n", p->pending_signals, new_pending_signals);
+          // cprintf("updating pending signals from %d to %d\n", p->pending_signals, new_pending_signals);
 
           p->pending_signals = new_pending_signals;
 
@@ -644,7 +608,7 @@ int kill(int pid, int signum) {
         popcli();
         return -1;
       default:
-        cprintf("kill pid=%d signum=%d\n", pid, signum);
+        // cprintf("kill pid=%d signum=%d\n", pid, signum);
         p->pending_signals |= (1 << signum);
 
         popcli();
@@ -728,48 +692,44 @@ sighandler_t signal(int signum, sighandler_t handler){
 
 void sigret(void) {
   pushcli();
+
   struct proc *p = myproc();
   memmove(p->tf, p->tf_backup, sizeof(struct trapframe));
   p->tf->esp += sizeof (struct trapframe);
   p->ignore_signals = 0;
+
   popcli();
-  cprintf("Done sigret.\n");
+
+  // cprintf("Done sigret.\n");
 }
 
 void checkSignals(struct trapframe *tf) {
   struct proc *p = myproc();
 
-  if (p == 0){
+  if (p == 0) {
     return;
   }
 
-  if (p->ignore_signals){
+  if (p->ignore_signals) {
     return;
   }
-
-  //if ((tf->cs & 3) != DPL_USER)
-  //  return; // CPU isn't at privilege level 3, hence in user mode
 
   // cprintf("pook %d %d %d\n", p->pid, p->stopped, (tf->cs & 3) == DPL_USER);
 
   //if (p->stopped && (tf->cs & 3) == DPL_USER) {
   if (p->stopped) {
-    cprintf("pook a - %d\n", p->pid);
     while (1) {
       uint cont = (1 << SIGCONT);
       int cont_pending = p->pending_signals & cont;
-      for (int j = 0; j < 1000000; j++) {
 
-      }
       // cprintf("checking if %d is in %d, result = %d\n", cont, p->pending_signals, cont_pending);
       if (cont_pending) {
-        cprintf("pook c");
         pushcli();
+
         if (cas(&p->stopped, 1, 0)) {
-          cprintf("pook d");
           p->pending_signals = (1 << SIGCONT) ^ p->pending_signals;
         }
-        cprintf("pook e");
+
         popcli();
         break;
       } else {
@@ -778,7 +738,7 @@ void checkSignals(struct trapframe *tf) {
     }
   }
 
-  if (p->stopped){
+  if (p->stopped) {
     return;
   }
 
@@ -786,14 +746,14 @@ void checkSignals(struct trapframe *tf) {
     if (((1 << i) & p->pending_signals) == 0) {
       continue;
     }
-    cprintf("BOOM\n");
+
     p->pending_signals = (1 << i) ^ p->pending_signals;
 
-    if (p->signal_handlers[i] == (void*)SIG_IGN) {
+    if (p->signal_handlers[i] == (void *) SIG_IGN) {
       continue;
     }
 
-    if (p->signal_handlers[i] == (void*)SIG_DFL) {
+    if (p->signal_handlers[i] == (void *) SIG_DFL) {
       kill(p->pid, SIGKILL);
       continue;
     }
@@ -801,7 +761,6 @@ void checkSignals(struct trapframe *tf) {
     if ((tf->cs & 3) == DPL_USER && myproc() != 0 && (myproc()->pending_signals & (1 << i))) {
       pushcli();
       if (cas(&myproc()->ignore_signals, 1, 0)) {
-        cprintf("BOOOM 2\n");
         myproc()->pending_signals = (1 << i) ^ myproc()->pending_signals;
       }
       popcli();
@@ -809,57 +768,25 @@ void checkSignals(struct trapframe *tf) {
 
     p->ignore_signals = 1;
 
-    /*
-    uint sigret_size;
-    sigret_size = (uint) invoke_sigret_end - (uint) invoke_sigret_start;
+    // moving back to backup trapframe
+    p->tf->esp -= sizeof(struct trapframe);
+    // backup
+    memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));
+    p->tf_backup = (void *) (p->tf->esp);
 
-    // address on code on stack to return to
-    uint sigret_address = p->tf->esp - sigret_size;
+    uint size = (uint) &invoke_sigret_end - (uint) &invoke_sigret_start;
+    // moving back to have space for the code
+    p->tf->esp -= size;
+    memmove((void *) (p->tf->esp), invoke_sigret_start, size);
 
-    p->tf_backup = (struct trapframe *) p->tf->esp - sizeof(struct trapframe) - sigret_size;
+    // parameter - signum
+    *((int *) (p->tf->esp - 4)) = i;
 
-    // copying the tf to the stack
-    memmove(p->tf_backup, p->tf, sizeof(struct trapframe));
-    // copying the code to the stack
-    memmove((void *) sigret_address, invoke_sigret_start, sigret_size);
+    // return address
+    *((int *) (p->tf->esp - 8)) = p->tf->esp;
 
-    p->tf->esp -= (sizeof(struct trapframe) + sigret_size);
-
-    *(int *) (p->tf->esp - 4) = i;
-    *(int *) (p->tf->esp - 8) = sigret_address;
-
-    p->tf->esp = p->tf->esp - 8 + sizeof(struct trapframe) + sigret_size;
-
-    p->tf->eip = (uint) p->signal_handlers[i];
-    */
-
-    p->tf->esp -= sizeof (struct trapframe); //make room in the stack for the backup trapframe (sizeof trapframe)
-    memmove((void*)(p->tf->esp), p->tf, sizeof (struct trapframe));  //move the current trapframe memory block into here.
-    p->tf_backup = (void*)(p->tf->esp);
-
-    uint length = (uint)&invoke_sigret_end - (uint)&invoke_sigret_start;
-    p->tf->esp -= length; //clear space in the stack for sigret code
-    memmove((void*)(p->tf->esp), invoke_sigret_start, length);  //memmove the data from sigretstart address
-
-    *((int*) (p->tf->esp - 4)) = i; //push argument
-    *((int*) (p->tf->esp - 8)) = p->tf->esp; //push return address
     p->tf->esp -= 8;
-    //cprintf("changing IP, signum: %d\1
-    // n",  signum);
     p->tf->eip = (uint) p->signal_handlers[i];
     break;
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
