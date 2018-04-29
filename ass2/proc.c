@@ -716,7 +716,6 @@ void checkSignals(struct trapframe *tf) {
 
   // cprintf("pook %d %d %d\n", p->pid, p->stopped, (tf->cs & 3) == DPL_USER);
 
-  //if (p->stopped && (tf->cs & 3) == DPL_USER) {
   if (p->stopped) {
     while (1) {
       uint cont = (1 << SIGCONT);
@@ -743,7 +742,9 @@ void checkSignals(struct trapframe *tf) {
   }
 
   for (int i = 0; i < 32; i++) {
-    if (((1 << i) & p->pending_signals) == 0) {
+    int is_current_pending = ((1 << i) & p->pending_signals) != 0;
+
+    if (!is_current_pending) {
       continue;
     }
 
@@ -758,10 +759,11 @@ void checkSignals(struct trapframe *tf) {
       continue;
     }
 
-    if ((tf->cs & 3) == DPL_USER && myproc() != 0 && (myproc()->pending_signals & (1 << i))) {
+    if ((tf->cs & 3) == DPL_USER) {
       pushcli();
-      if (cas(&myproc()->ignore_signals, 1, 0)) {
-        myproc()->pending_signals = (1 << i) ^ myproc()->pending_signals;
+      if (cas(&p->ignore_signals, 1, 0)) {
+        // turn off
+        p->pending_signals ^= (1 << i);
       }
       popcli();
     }
