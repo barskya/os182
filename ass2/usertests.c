@@ -1827,8 +1827,10 @@ void sanity5(){
   if (pid == 0){
     signal(10, foo);
     signal(11, bar);
-    for(int i=0; i <= 10000; i++){
-
+    for(int i=0; i <= 1000000; i++){
+      if (i % 1000 == 0){
+        printf(2, "sanity child, i = %d\n", i);
+      }
     }
     exit();
   }
@@ -1836,9 +1838,9 @@ void sanity5(){
   printf(2, "child pid =1 %d\n", pid);
   sleep(10);
   kill(pid, 10);
-  wait();
+  sleep(10);
   kill(pid, 11);
-  wait();
+  sleep(10);
   kill(pid, 9);
   printf(2, "Done sanity4\n");
 }
@@ -1847,7 +1849,7 @@ void sanity6(){
   int pid = fork();
   if (pid == 0){
     signal(10, foo);
-    for(int i=0; i <= 100000; i++){
+    for(int i=0; i <= 1000000; i++){
       if (i % 1000 == 0){
         printf(2, "sanity child, i = %d\n", i);
       }
@@ -1858,10 +1860,10 @@ void sanity6(){
   printf(2, "child pid = %d\n", pid);
   sleep(10);
   kill(pid, 10);
-  wait();
   sleep(10);
   kill(pid, 10);
-  wait();
+  sleep(10);
+
   kill(pid, 9);
   printf(2, "Done sanity4\n");
 }
@@ -1914,13 +1916,13 @@ int main(int argc, char *argv[])
   //sanity4();
   //sanity5();
   //sanity6();
-  sanity7();
+  //sanity7();
 
   //////////////
   //////////////
   //////////////
   //////////////
-/*
+
   argptest();
   createdelete();
   linkunlink();
@@ -1963,6 +1965,6 @@ int main(int argc, char *argv[])
   uio();
 
   exectest();
-*/
+
   exit();
 }

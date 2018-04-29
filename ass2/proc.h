@@ -85,9 +85,7 @@ struct proc {
   void* signal_handlers[32];
   struct trapframe* tf_backup;
   int stopped;
-    // todo unique-ify
-  int ignoreSignals;
-  struct cstack cstack;
+  int ignore_signals;
 };
 
 // ass2

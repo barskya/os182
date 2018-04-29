@@ -363,7 +363,7 @@ int wait(void)  {
 
   for(;;){
     debug("Entering infinite wait\n");
-    // procdump();
+    //procdump();
 
     if (!try_cas(curproc, RUNNING, NEG_SLEEPING)) {
       // todo tweak
