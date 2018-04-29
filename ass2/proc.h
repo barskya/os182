@@ -44,25 +44,6 @@ enum procstate {  UNUSED, // 0
                   NEG_ZOMBIE  // 9
                };
 
-void freeproc2(struct proc *p);
-
-// todo uinque-ify
-// entry in concurrent stack
-struct cstackframe {
-    int sender_pid;
-    int recepient_pid;
-    int value;
-    int used;
-    struct cstackframe *next;
-};
-
-// todo unique-ify
-// concurrent stack
-struct cstack {
-    struct cstackframe frames[10];
-    struct cstackframe *head;
-};
-
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)

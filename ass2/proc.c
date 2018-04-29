@@ -172,8 +172,6 @@ userinit(void) {
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  // todo make sure
-  //acquire(&ptable.lock);
   pushcli();
 
   //ass2
@@ -188,8 +186,6 @@ userinit(void) {
 
   change_state(p, RUNNABLE);
 
-  // todo make sure
-  // release(&ptable.lock);
   popcli();
 }
 
@@ -254,8 +250,7 @@ fork(void)
 
   pid = np->pid;
 
-  // todo make sure
-  // acquire(&ptable.lock);
+
   pushcli();
 
   if (!try_cas(np, EMBRYO, RUNNABLE))
@@ -273,8 +268,6 @@ fork(void)
   np->ignore_signals = 0;
   np->stopped = 0;
 
-  // todo make sure
-  // release(&ptable.lock);
   popcli();
 
   return pid;
@@ -366,8 +359,7 @@ int wait(void)  {
     //procdump();
 
     if (!try_cas(curproc, RUNNING, NEG_SLEEPING)) {
-      // todo tweak
-      panic("scheduler: cas failed");
+      panic("running -> neg_sleeping cas failed");
     }
 
     set_chan(curproc, curproc);
@@ -401,8 +393,7 @@ int wait(void)  {
     if(!havekids || curproc->killed){
       set_chan(curproc, 0);
       if (!try_cas(curproc, NEG_SLEEPING, RUNNING)) {
-        // todo tweak
-        panic("wait: CAS from NEG_SLEEPING to RUNNING failed");
+        panic("neg_sleeping->running cas failed");
       }
 
       popcli();
@@ -433,8 +424,6 @@ void scheduler(void)  {
     sti();
 
     // Loop over process table looking for process to run.
-    // todo make sure
-    // acquire(&ptable.lock);
     pushcli();
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(!try_cas(p, RUNNABLE, RUNNING)) {
@@ -461,14 +450,13 @@ void scheduler(void)  {
       }
       if (try_cas(p, NEG_RUNNABLE, RUNNABLE)) {
       }
-      // todo
+
       if (try_cas(p, NEG_ZOMBIE, ZOMBIE)) {
         // set_chan(p, 0);
         wakeup1(p->parent);
       }
     }
-    // todo make sure
-    // release(&ptable.lock);
+
     popcli();
   }
 }
@@ -724,7 +712,6 @@ sighandler_t signal(int signum, sighandler_t handler){
     struct proc* p = myproc();
     sighandler_t old_handler;
 
-    // todo make sure this validity is correct
     // Check for validity: signum is between 0 to 31 and handler is valid pointer
     if (signum < 0 || signum > 31 || handler == 0) {
       return (sighandler_t) - 1;
